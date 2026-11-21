@@ -1,6 +1,5 @@
 package ru.player_skill.weatherage;
 
-import io.papermc.paper.event.server.ServerLoadEvent;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
 import org.bukkit.boss.BarColor;
@@ -14,6 +13,8 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.weather.WeatherChangeEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
+
+import ru.player_skill.weatherage.command.WeatherAgeCommand;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -69,6 +70,9 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         getCommand("weatherage").setExecutor(cmd);
         getCommand("weatherage").setTabCompleter(cmd);
 
+        // Запуск кастомных циклов погоды (в 1.12.2 ServerLoadEvent нет — стартуем здесь)
+        startCustomWeatherCycles();
+
         getLogger().info("WeatherAge включен. Миров в вайтлисте: " + whitelist.size());
     }
 
@@ -114,11 +118,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         world.setStorm(false);
         world.setThundering(false);
         world.setWeatherDuration(Integer.MAX_VALUE);
-    }
-
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onServerLoad(ServerLoadEvent e) {
-        startCustomWeatherCycles();
     }
 
     // ------------------------------------------------------------------
