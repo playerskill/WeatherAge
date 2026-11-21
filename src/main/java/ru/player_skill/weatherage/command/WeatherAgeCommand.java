@@ -45,8 +45,7 @@ public final class WeatherAgeCommand implements CommandExecutor, TabCompleter {
 
         // /weatherage — зашитая в коде строка о функциях и авторе
         if (args.length == 0) {
-            sender.sendMessage(color("&6WeatherAge &7— &fкастомная погода, боссбары "
-                    + "и блокировка цикла погоды по мирам. &7Автор: &bPlayeR_SkiLL"));
+            sender.sendMessage(color("&bWeather&3Age &7- &fплагин для управления погодой от &6PlayeR_SkiLL&f."));
             return true;
         }
 
