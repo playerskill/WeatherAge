@@ -153,6 +153,10 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                 continue;
             }
 
+            // Синхронизируем реальную погоду мира с выбранным стартовым состоянием:
+            // иначе боссбар мог показывать «солнце», а в мире шёл дождь из ванили.
+            wc.init(world);
+
             WeatherCycleTask task = new WeatherCycleTask(world, wc);
             cycleTasks.add(task);
             task.runTaskTimer(this, 0L, 20L);
@@ -280,9 +284,8 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             bossbarSunFixedProgress = clampProgress(sec.getDouble("bossbar-sun-fixed-progress", 1.0));
             bossbarSunText = sec.getString("bossbar-sun-text", "\u2615 Солнечная погода");
             chatSunText = sec.getString("chat-sun-text", "");
-            // Стиль: если не задан — SOLID для fixed, SEGMENTED_10 для countdown
             String sunStyleRaw = sec.getString("bossbar-sun-style", defaultStyleFor(bossbarSunMode));
-            bossbarSunStyle = parseStyle(sunStyleRaw, defaultStyleFor(bossbarSunMode));
+            bossbarSunStyle = parseStyle(sunStyleRaw);
             String sunColorRaw = sec.getString("bossbar-sun-color", "YELLOW");
             bossbarSunColor = parseColor(sunColorRaw, BarColor.YELLOW);
 
@@ -294,7 +297,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             bossbarRainText = sec.getString("bossbar-rain-text", "\uD83C\uDF27 Идёт дождь");
             chatRainText = sec.getString("chat-rain-text", "Начался дождь!");
             String rainStyleRaw = sec.getString("bossbar-rain-style", defaultStyleFor(bossbarRainMode));
-            bossbarRainStyle = parseStyle(rainStyleRaw, defaultStyleFor(bossbarRainMode));
+            bossbarRainStyle = parseStyle(rainStyleRaw);
             String rainColorRaw = sec.getString("bossbar-rain-color", "BLUE");
             bossbarRainColor = parseColor(rainColorRaw, BarColor.BLUE);
             rainMin = sec.getInt("rain-min-seconds", 1000);
@@ -309,7 +312,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             bossbarThunderText = sec.getString("bossbar-thunder-text", "\u26A1 Гроза!");
             chatThunderText = sec.getString("chat-thunder-text", "Началась гроза!");
             String thunderStyleRaw = sec.getString("bossbar-thunder-style", defaultStyleFor(bossbarThunderMode));
-            bossbarThunderStyle = parseStyle(thunderStyleRaw, defaultStyleFor(bossbarThunderMode));
+            bossbarThunderStyle = parseStyle(thunderStyleRaw);
             String thunderColorRaw = sec.getString("bossbar-thunder-color", "PURPLE");
             bossbarThunderColor = parseColor(thunderColorRaw, BarColor.PURPLE);
             thunderMin = sec.getInt("thunder-min-seconds", 1000);
@@ -324,9 +327,17 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             showChatMessage = sec.getBoolean("show-chat-message", true);
 
             currentState = pickNextState();
-            long firstDuration = durationFor(currentState);
-            stateTotalMs = firstDuration * 1000L;
+        }
+
+        /**
+         * Первичная установка погоды и боссбара при запуске цикла.
+         * Без неё мир стартовал бы с ванильной погодой, а боссбар — с конфиг-состоянием.
+         */
+        void init(World world) {
+            long duration = durationFor(currentState);
+            stateTotalMs = duration * 1000L;
             nextChangeAt = System.currentTimeMillis() + stateTotalMs;
+            applyState(world, currentState);
         }
 
         private WeatherState pickNextState() {
@@ -365,21 +376,26 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         void update(World world) {
             long now = System.currentTimeMillis();
             if (now >= nextChangeAt) {
+                // ВАЖНО: сначала обновляем счётчики нового состояния,
+                // потом применяем погоду. updateBossbar внутри applyState
+                // считает elapsed от nextChangeAt - stateTotalMs — если бы
+                // счётчики обновились после, расчёт шёл бы по старому состоянию.
                 WeatherState next = pickNextState();
-                applyState(world, next);
                 currentState = next;
                 stateTotalMs = durationFor(next) * 1000L;
                 nextChangeAt = now + stateTotalMs;
+                applyState(world, next);
             } else {
                 updateBossbar(world);
             }
         }
 
+        /** Принудительная установка погоды: сбрасывает счётчик, отсчёт начинается заново. */
         void forceWeather(World world, WeatherState state) {
-            applyState(world, state);
             currentState = state;
             stateTotalMs = durationFor(state) * 1000L;
             nextChangeAt = System.currentTimeMillis() + stateTotalMs;
+            applyState(world, state);
         }
 
         private void applyState(World world, WeatherState state) {
@@ -585,16 +601,19 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         return "fixed".equals(mode) ? "SOLID" : "SEGMENTED_10";
     }
 
-    /** Парсит имя стиля с fallback'ом на дефолт при опечатке. */
-    private static BarStyle parseStyle(String raw, BarStyle def) {
+    /**
+     * Парсит имя стиля. Значение по умолчанию уже подставлено при чтении конфига
+     * (defaultStyleFor), поэтому fallback нужен только для опечаток.
+     */
+    private static BarStyle parseStyle(String raw) {
         if (raw == null) {
-            return def;
+            return BarStyle.SEGMENTED_10;
         }
         String s = raw.trim().toUpperCase(Locale.ROOT);
         try {
             return BarStyle.valueOf(s);
         } catch (IllegalArgumentException ex) {
-            return def;
+            return BarStyle.SEGMENTED_10;
         }
     }
 
