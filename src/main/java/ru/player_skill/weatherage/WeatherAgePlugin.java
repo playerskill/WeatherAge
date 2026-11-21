@@ -23,6 +23,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
+/**
+ * WeatherAge — кастомная погода по мирам.
+ *
+ * Логика режимов:
+ *  - Мир в вайтлисте + есть секция custom-weather → кастомный цикл (солнце/дождь/гроза,
+ *    боссбары, чат-оповещения).
+ *  - Мир в вайтлисте + нет секции → обычная ванильная погода (плагин не вмешивается).
+ *  - Мир не в вайтлисте → погода всегда солнечная (любая смена погоды отменяется).
+ */
 public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
     private final Map<String, WorldConfig> worldConfigs = new HashMap<>();
@@ -30,7 +39,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
     private final Map<World, BossBar> activeBossBars = new HashMap<>();
     private final List<BukkitRunnable> cycleTasks = new ArrayList<>();
 
-    /** Миры, где следующая смена погоды разрешена (для принудительной установки командой вне вайтлиста). */
+    /** Миры, где разрешена одна принудительная смена погоды (для миров вне вайтлиста). */
     private final Set<String> allowNextWeatherChange = new HashSet<>();
 
     // ------------------------------------------------------------------
@@ -42,8 +51,12 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         saveDefaultConfig();
         loadConfig();
 
-        // При старте всё приводим к солнцу
+        // Солнце ставим только НЕ-вайтлистным мирам.
+        // Вайтлистные миры не трогаем: там ванильная погода или кастомный цикл.
         for (World world : Bukkit.getWorlds()) {
+            if (whitelist.contains(world.getName())) {
+                continue;
+            }
             world.setStorm(false);
             world.setThundering(false);
             world.setWeatherDuration(Integer.MAX_VALUE);
@@ -70,7 +83,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         }
         cycleTasks.clear();
 
-        // Убираем боссбары у всех игроков
+        // Убираем боссбары
         for (BossBar bar : activeBossBars.values()) {
             bar.removeAll();
         }
@@ -90,13 +103,12 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        // Миры из вайтлиста управляются кастомным циклом — не трогаем
+        // Вайтлистные миры: погодой управляет ваниль или кастомный цикл — не мешаем
         if (whitelist.contains(name)) {
             return;
         }
 
-        // Все остальные миры: любая смена погоды отменяется, погода держится солнечной.
-        // Это же блокирует цвет неба — без дождя и грозы небо не меняется.
+        // Все остальные миры: погода всегда солнечная
         e.setCancelled(true);
         World world = e.getWorld();
         world.setStorm(false);
@@ -147,16 +159,24 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
             WorldConfig wc = worldConfigs.get(name);
             if (wc == null) {
-                // Мир в вайтлисте, но без кастомной погоды — держим солнечно
-                world.setStorm(false);
-                world.setThundering(false);
-                world.setWeatherDuration(Integer.MAX_VALUE);
+                // В вайтлисте, но без секции настроек: обычная ванильная погода.
+                // Ничего не блокируем и не запускаем — пусть работает ваниль.
+                getLogger().info("Мир '" + name + "': в вайтлисте без секции custom-weather — обычная ванильная погода.");
                 continue;
             }
 
             WeatherCycleTask task = new WeatherCycleTask(world, wc);
             cycleTasks.add(task);
             task.runTaskTimer(this, 0L, 20L); // проверка раз в секунду
+        }
+
+        // Мировые «сироты»: секция настроек есть, но мир не в вайтлисте.
+        for (String cfgWorld : worldConfigs.keySet()) {
+            if (!whitelist.contains(cfgWorld)) {
+                getLogger().warning("Для мира '" + cfgWorld + "' есть секция custom-weather, "
+                        + "но мир не в вайтлисте — настройки игнорируются, погода в мире всегда солнечная. "
+                        + "Добавьте мир в whitelist или удалите секцию.");
+            }
         }
     }
 
@@ -178,9 +198,21 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             bar.removeAll();
         }
         activeBossBars.clear();
+        allowNextWeatherChange.clear();
 
         reloadConfig();
         loadConfig();
+
+        // Приводим не-вайтлистные миры к солнцу (могли убрать мир из вайтлиста)
+        for (World world : Bukkit.getWorlds()) {
+            if (whitelist.contains(world.getName())) {
+                continue;
+            }
+            world.setStorm(false);
+            world.setThundering(false);
+            world.setWeatherDuration(Integer.MAX_VALUE);
+        }
+
         startCustomWeatherCycles();
     }
 
@@ -189,11 +221,13 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
      * type: "sun", "rain" или "storm".
      * Для миров с кастомным конфигом сбрасывает счётчик: начинается новый отсчёт
      * длительности из конфига для выбранного типа погоды.
-     * Для миров вне конфига погода ставится напрямую (одна смена разрешается).
+     * Для миров вне конфига (в т.ч. вайтлистных без настроек) погода ставится напрямую:
+     * одна смена разрешается через allowNextWeatherChange, дальше мир живёт по своим
+     * правилам (ваниль или вечное солнце — смотря в вайтлисте ли он).
      */
     public void forceWeather(World world, String type) {
         WorldConfig wc = worldConfigs.get(world.getName());
-        if (wc != null) {
+        if (wc != null && whitelist.contains(world.getName())) {
             WeatherState state;
             if ("sun".equalsIgnoreCase(type)) {
                 state = WeatherState.SUN;
@@ -272,7 +306,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
             showChatMessage = sec.getBoolean("show-chat-message", true);
 
-            // Первое состояние выбирается случайно, стартуем с солнечной длительности по умолчанию
+            // Первое состояние выбирается случайно
             currentState = pickNextState();
             long firstDuration = durationFor(currentState);
             stateTotalMs = firstDuration * 1000L;
