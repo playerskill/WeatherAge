@@ -1,6 +1,7 @@
 package ru.player_skill.weatherage;
 
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.World;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
@@ -153,8 +154,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                 continue;
             }
 
-            // Синхронизируем реальную погоду мира с выбранным стартовым состоянием:
-            // иначе боссбар мог показывать «солнце», а в мире шёл дождь из ванили.
+            // Первичная установка погоды и боссбара — чтобы всё сходило с первой секунды.
             wc.init(world);
 
             WeatherCycleTask task = new WeatherCycleTask(world, wc);
@@ -331,13 +331,13 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
         /**
          * Первичная установка погоды и боссбара при запуске цикла.
-         * Без неё мир стартовал бы с ванильной погодой, а боссбар — с конфиг-состоянием.
+         * Чат не трогаем: погода не «сменялась», она просто установилась.
          */
         void init(World world) {
             long duration = durationFor(currentState);
             stateTotalMs = duration * 1000L;
             nextChangeAt = System.currentTimeMillis() + stateTotalMs;
-            applyState(world, currentState);
+            applyState(world, currentState, false);
         }
 
         private WeatherState pickNextState() {
@@ -376,29 +376,36 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         void update(World world) {
             long now = System.currentTimeMillis();
             if (now >= nextChangeAt) {
-                // ВАЖНО: сначала обновляем счётчики нового состояния,
-                // потом применяем погоду. updateBossbar внутри applyState
-                // считает elapsed от nextChangeAt - stateTotalMs — если бы
-                // счётчики обновились после, расчёт шёл бы по старому состоянию.
+                // Сначала обновляем счётчики нового состояния, потом применяем погоду —
+                // расчёт elapsed внутри updateBossbar идёт по актуальному состоянию.
                 WeatherState next = pickNextState();
+                boolean changed = (next != currentState);
                 currentState = next;
                 stateTotalMs = durationFor(next) * 1000L;
                 nextChangeAt = now + stateTotalMs;
-                applyState(world, next);
+                applyState(world, next, changed);
             } else {
                 updateBossbar(world);
             }
         }
 
-        /** Принудительная установка погоды: сбрасывает счётчик, отсчёт начинается заново. */
+        /**
+         * Принудительная установка погоды: сбрасывает счётчик, отсчёт начинается заново.
+         * Если поставили тот же тип погоды — только сброс таймера, без чата.
+         */
         void forceWeather(World world, WeatherState state) {
+            boolean changed = (state != currentState);
             currentState = state;
             stateTotalMs = durationFor(state) * 1000L;
             nextChangeAt = System.currentTimeMillis() + stateTotalMs;
-            applyState(world, state);
+            applyState(world, state, changed);
         }
 
-        private void applyState(World world, WeatherState state) {
+        /**
+         * Применяет состояние к миру. Сообщение в чат — только если погода
+         * реально сменилась (announce = true) и текст непустой.
+         */
+        private void applyState(World world, WeatherState state, boolean announce) {
             boolean isStorm;
             boolean isThunder;
 
@@ -434,9 +441,10 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             world.setThundering(isThunder);
             world.setWeatherDuration(Integer.MAX_VALUE);
 
-            if (showChatMessage && chatMsg != null && !chatMsg.isEmpty()) {
+            if (announce && showChatMessage && chatMsg != null && !chatMsg.isEmpty()) {
+                String coloredMsg = cc(chatMsg);
                 for (Player p : world.getPlayers()) {
-                    p.sendMessage(chatMsg);
+                    p.sendMessage(coloredMsg);
                 }
             }
 
@@ -501,11 +509,11 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
             BossBar bar = activeBossBars.get(world);
             if (bar == null) {
-                bar = Bukkit.createBossBar(text, color, style);
+                bar = Bukkit.createBossBar(cc(text), color, style);
                 activeBossBars.put(world, bar);
             }
 
-            bar.setTitle(text);
+            bar.setTitle(cc(text));
             bar.setColor(color);
             bar.setStyle(style);
 
@@ -584,6 +592,11 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                 old.removeAll();
             }
         }
+    }
+
+    /** Переводит &-коды цветов. null → пустая строка. */
+    private static String cc(String raw) {
+        return raw == null ? "" : ChatColor.translateAlternateColorCodes('&', raw);
     }
 
     private static String normalizeMode(String raw) {
