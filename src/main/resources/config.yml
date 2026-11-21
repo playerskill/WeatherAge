@@ -1,3 +1,7 @@
+# МИРЫ ВНЕ ВАЙТЛИСТА: погода всегда солнечная (плагин блокирует смену).
+# МИРЫ В ВАЙТЛИСТЕ БЕЗ СЕКЦИИ НИЖЕ: обычная ванильная погода.
+# МИРЫ В ВАЙТЛИСТЕ С СЕКЦИЕЙ НИЖЕ: кастомный цикл погоды.
+
 whitelist:
   - My_World
   - My_World2
@@ -6,7 +10,7 @@ custom-weather:
   My_World:
     enable-bossbar-sun: true
     bossbar-sun-text: "☀ Солнечная погода"
-    chat-sun-text: ""                  # пусто = не писать в чат
+    chat-sun-text: ""
 
     enable-bossbar-rain: true
     bossbar-rain-text: "🌧 Идёт дождь"
@@ -26,32 +30,4 @@ custom-weather:
     sun-max-seconds: 20000
     chance-sun: 0.7
 
-    show-chat-message: false           # полностью отключить чат для этого мира
-
-  My_World2:
-    enable-bossbar-sun: true
-    bossbar-sun-text: "☀ Солнце"
-    chat-sun-text: ""
-    enable-bossbar-rain: true
-    bossbar-rain-text: "🌧 Дождь"
-    chat-rain-text: "Начался дождь!"
-    enable-bossbar-thunder: true
-    bossbar-thunder-text: "⚡ Гроза"
-    chat-thunder-text: "Началась гроза!"
-    rain-min-seconds: 500
-    rain-max-seconds: 1500
-    chance-rain: 0.3
-    thunder-min-seconds: 500
-    thunder-max-seconds: 1000
-    chance-thunder: 0.1
-    sun-min-seconds: 3000
-    sun-max-seconds: 6000
-    chance-sun: 0.6
     show-chat-message: true
-
-messages:
-  no-permission: "&cУ вас нет прав для выполнения этой команды."
-  reload-success: "&aКонфиг WeatherAge перезагружен."
-  forced-sun: "&aПогода в мире '%world%' установлена: Солнце."
-  forced-rain: "&aПогода в мире '%world%' установлена: Дождь."
-  forced-storm: "&aПогода в мире '%world%' установлена: Гроза."
