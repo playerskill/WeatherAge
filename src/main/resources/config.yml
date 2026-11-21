@@ -1,0 +1,22 @@
+name: WeatherAge
+version: 1.0.0
+main: ru.player_skill.weatherage.WeatherAgePlugin
+author: PlayeR_SkiLL, Alice AI
+description: A plugin for creating your own rules for changing the weather in the worlds. Made by Alice AI at the request of PlayeR_SkiLL.
+
+commands:
+  weatherage:
+    description: Управление погодой WeatherAge
+    usage: /weatherage [reload|sun|rain|storm] [world]
+    aliases:
+      - wage
+
+permissions:
+  weatherage.admin:
+    description: Перезагрузка конфига плагина
+    default: op
+    children:
+      weatherage.force: true
+  weatherage.force:
+    description: Принудительная смена погоды командой
+    default: op
