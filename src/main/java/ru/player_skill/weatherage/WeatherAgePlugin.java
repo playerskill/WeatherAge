@@ -112,12 +112,11 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        // Все остальные миры: погода всегда солнечная
+        // Все остальные миры: запрещаем любую смену погоды — мир остаётся солнечным.
+        // ВАЖНО: внутри обработчика нельзя вызывать setStorm/setThundering —
+        // эти вызовы сами выбрасывают WeatherChangeEvent и дают бесконечную
+        // рекурсию (StackOverflowError). Достаточно только отмены события.
         e.setCancelled(true);
-        World world = e.getWorld();
-        world.setStorm(false);
-        world.setThundering(false);
-        world.setWeatherDuration(Integer.MAX_VALUE);
     }
 
     // ------------------------------------------------------------------
