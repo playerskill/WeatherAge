@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
@@ -53,7 +54,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         loadConfig();
 
         // Солнце ставим только НЕ-вайтлистным мирам.
-        // Вайтлистные миры не трогаем: там ванильная погода или кастомный цикл.
         for (World world : Bukkit.getWorlds()) {
             if (whitelist.contains(world.getName())) {
                 continue;
@@ -65,12 +65,10 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
         getServer().getPluginManager().registerEvents(this, this);
 
-        // Команда /weatherage (обработчик вынесен в отдельный класс)
         WeatherAgeCommand cmd = new WeatherAgeCommand(this);
         getCommand("weatherage").setExecutor(cmd);
         getCommand("weatherage").setTabCompleter(cmd);
 
-        // Запуск кастомных циклов погоды (в 1.12.2 ServerLoadEvent нет — стартуем здесь)
         startCustomWeatherCycles();
 
         getLogger().info("WeatherAge включен. Миров в вайтлисте: " + whitelist.size());
@@ -78,7 +76,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
-        // Отменяем таймеры
         for (BukkitRunnable task : cycleTasks) {
             try {
                 task.cancel();
@@ -87,7 +84,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         }
         cycleTasks.clear();
 
-        // Убираем боссбары
         for (BossBar bar : activeBossBars.values()) {
             bar.removeAll();
         }
@@ -102,20 +98,16 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
     public void onWeatherChange(WeatherChangeEvent e) {
         String name = e.getWorld().getName();
 
-        // Разрешена одна принудительная смена (для миров вне вайтлиста)
         if (allowNextWeatherChange.remove(name)) {
             return;
         }
 
-        // Вайтлистные миры: погодой управляет ваниль или кастомный цикл — не мешаем
         if (whitelist.contains(name)) {
             return;
         }
 
-        // Все остальные миры: запрещаем любую смену погоды — мир остаётся солнечным.
-        // ВАЖНО: внутри обработчика нельзя вызывать setStorm/setThundering —
-        // эти вызовы сами выбрасывают WeatherChangeEvent и дают бесконечную
-        // рекурсию (StackOverflowError). Достаточно только отмены события.
+        // Запрещаем смену погоды. Внутри обработчика нельзя вызывать setStorm —
+        // иначе бесконечная рекурсия (WeatherChangeEvent сам себя перезапускает).
         e.setCancelled(true);
     }
 
@@ -157,18 +149,15 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
             WorldConfig wc = worldConfigs.get(name);
             if (wc == null) {
-                // В вайтлисте, но без секции настроек: обычная ванильная погода.
-                // Ничего не блокируем и не запускаем — пусть работает ваниль.
                 getLogger().info("Мир '" + name + "': в вайтлисте без секции custom-weather — обычная ванильная погода.");
                 continue;
             }
 
             WeatherCycleTask task = new WeatherCycleTask(world, wc);
             cycleTasks.add(task);
-            task.runTaskTimer(this, 0L, 20L); // проверка раз в секунду
+            task.runTaskTimer(this, 0L, 20L);
         }
 
-        // Мировые «сироты»: секция настроек есть, но мир не в вайтлисте.
         for (String cfgWorld : worldConfigs.keySet()) {
             if (!whitelist.contains(cfgWorld)) {
                 getLogger().warning("Для мира '" + cfgWorld + "' есть секция custom-weather, "
@@ -182,7 +171,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
     // Публичный API для команды
     // ------------------------------------------------------------------
 
-    /** Полная перезагрузка: конфиг + реестры миров + перезапуск циклов. */
     public void reloadAll() {
         for (BukkitRunnable task : cycleTasks) {
             try {
@@ -201,7 +189,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         reloadConfig();
         loadConfig();
 
-        // Приводим не-вайтлистные миры к солнцу (могли убрать мир из вайтлиста)
         for (World world : Bukkit.getWorlds()) {
             if (whitelist.contains(world.getName())) {
                 continue;
@@ -214,15 +201,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         startCustomWeatherCycles();
     }
 
-    /**
-     * Принудительно ставит погоду в мире.
-     * type: "sun", "rain" или "storm".
-     * Для миров с кастомным конфигом сбрасывает счётчик: начинается новый отсчёт
-     * длительности из конфига для выбранного типа погоды.
-     * Для миров вне конфига (в т.ч. вайтлистных без настроек) погода ставится напрямую:
-     * одна смена разрешается через allowNextWeatherChange, дальше мир живёт по своим
-     * правилам (ваниль или вечное солнце — смотря в вайтлисте ли он).
-     */
     public void forceWeather(World world, String type) {
         WorldConfig wc = worldConfigs.get(world.getName());
         if (wc != null && whitelist.contains(world.getName())) {
@@ -253,58 +231,98 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         final String worldName;
 
         final boolean enableBossbarSun;
+        final String bossbarSunMode;          // "countdown" | "fixed"
+        final int bossbarSunDisplaySeconds;   // fixed: сколько секунд показывать, -1 = вся погода
+        final double bossbarSunFixedProgress; // fixed: уровень бара 0.0..1.0
         final String bossbarSunText;
         final String chatSunText;
+        final BarStyle bossbarSunStyle;
+        final BarColor bossbarSunColor;
 
         final boolean enableBossbarRain;
+        final String bossbarRainMode;
+        final int bossbarRainDisplaySeconds;
+        final double bossbarRainFixedProgress;
         final String bossbarRainText;
         final String chatRainText;
+        final BarStyle bossbarRainStyle;
+        final BarColor bossbarRainColor;
         final int rainMin, rainMax;
         final double chanceRain;
 
         final boolean enableBossbarThunder;
+        final String bossbarThunderMode;
+        final int bossbarThunderDisplaySeconds;
+        final double bossbarThunderFixedProgress;
         final String bossbarThunderText;
         final String chatThunderText;
+        final BarStyle bossbarThunderStyle;
+        final BarColor bossbarThunderColor;
         final int thunderMin, thunderMax;
         final double chanceThunder;
 
         final int sunMin, sunMax;
         final double chanceSun;
 
-        final boolean showChatMessage; // глобальное отключение чата для мира
+        final boolean showChatMessage;
 
         private WeatherState currentState;
         private long nextChangeAt = 0L;
-        private long stateTotalMs = 0L; // полная длительность текущего состояния (для прогресса боссбара)
+        private long stateTotalMs = 0L;
 
         WorldConfig(String worldName, ConfigurationSection sec) {
             this.worldName = worldName;
 
+            // ---------- Солнце ----------
             enableBossbarSun = sec.getBoolean("enable-bossbar-sun", true);
+            bossbarSunMode = normalizeMode(sec.getString("bossbar-sun-mode", "countdown"));
+            bossbarSunDisplaySeconds = sec.getInt("bossbar-sun-display-seconds", -1);
+            bossbarSunFixedProgress = clampProgress(sec.getDouble("bossbar-sun-fixed-progress", 1.0));
             bossbarSunText = sec.getString("bossbar-sun-text", "\u2615 Солнечная погода");
             chatSunText = sec.getString("chat-sun-text", "");
+            // Стиль: если не задан — SOLID для fixed, SEGMENTED_10 для countdown
+            String sunStyleRaw = sec.getString("bossbar-sun-style", defaultStyleFor(bossbarSunMode));
+            bossbarSunStyle = parseStyle(sunStyleRaw, defaultStyleFor(bossbarSunMode));
+            String sunColorRaw = sec.getString("bossbar-sun-color", "YELLOW");
+            bossbarSunColor = parseColor(sunColorRaw, BarColor.YELLOW);
 
+            // ---------- Дождь ----------
             enableBossbarRain = sec.getBoolean("enable-bossbar-rain", true);
+            bossbarRainMode = normalizeMode(sec.getString("bossbar-rain-mode", "countdown"));
+            bossbarRainDisplaySeconds = sec.getInt("bossbar-rain-display-seconds", -1);
+            bossbarRainFixedProgress = clampProgress(sec.getDouble("bossbar-rain-fixed-progress", 1.0));
             bossbarRainText = sec.getString("bossbar-rain-text", "\uD83C\uDF27 Идёт дождь");
             chatRainText = sec.getString("chat-rain-text", "Начался дождь!");
+            String rainStyleRaw = sec.getString("bossbar-rain-style", defaultStyleFor(bossbarRainMode));
+            bossbarRainStyle = parseStyle(rainStyleRaw, defaultStyleFor(bossbarRainMode));
+            String rainColorRaw = sec.getString("bossbar-rain-color", "BLUE");
+            bossbarRainColor = parseColor(rainColorRaw, BarColor.BLUE);
             rainMin = sec.getInt("rain-min-seconds", 1000);
             rainMax = sec.getInt("rain-max-seconds", 2000);
             chanceRain = sec.getDouble("chance-rain", 0.2);
 
+            // ---------- Гроза ----------
             enableBossbarThunder = sec.getBoolean("enable-bossbar-thunder", true);
+            bossbarThunderMode = normalizeMode(sec.getString("bossbar-thunder-mode", "countdown"));
+            bossbarThunderDisplaySeconds = sec.getInt("bossbar-thunder-display-seconds", -1);
+            bossbarThunderFixedProgress = clampProgress(sec.getDouble("bossbar-thunder-fixed-progress", 1.0));
             bossbarThunderText = sec.getString("bossbar-thunder-text", "\u26A1 Гроза!");
             chatThunderText = sec.getString("chat-thunder-text", "Началась гроза!");
+            String thunderStyleRaw = sec.getString("bossbar-thunder-style", defaultStyleFor(bossbarThunderMode));
+            bossbarThunderStyle = parseStyle(thunderStyleRaw, defaultStyleFor(bossbarThunderMode));
+            String thunderColorRaw = sec.getString("bossbar-thunder-color", "PURPLE");
+            bossbarThunderColor = parseColor(thunderColorRaw, BarColor.PURPLE);
             thunderMin = sec.getInt("thunder-min-seconds", 1000);
             thunderMax = sec.getInt("thunder-max-seconds", 2000);
             chanceThunder = sec.getDouble("chance-thunder", 0.1);
 
+            // ---------- Тайминги солнца ----------
             sunMin = sec.getInt("sun-min-seconds", 10000);
             sunMax = sec.getInt("sun-max-seconds", 20000);
             chanceSun = sec.getDouble("chance-sun", 0.7);
 
             showChatMessage = sec.getBoolean("show-chat-message", true);
 
-            // Первое состояние выбирается случайно
             currentState = pickNextState();
             long firstDuration = durationFor(currentState);
             stateTotalMs = firstDuration * 1000L;
@@ -357,7 +375,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             }
         }
 
-        /** Принудительная установка погоды: сбрасывает счётчик, отсчёт начинается заново. */
         void forceWeather(World world, WeatherState state) {
             applyState(world, state);
             currentState = state;
@@ -379,21 +396,21 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                     isThunder = false;
                     chatMsg = chatSunText;
                     bossbarText = bossbarSunText;
-                    color = BarColor.YELLOW;
+                    color = bossbarSunColor;
                     break;
                 case RAIN:
                     isStorm = true;
                     isThunder = false;
                     chatMsg = chatRainText;
                     bossbarText = bossbarRainText;
-                    color = BarColor.BLUE;
+                    color = bossbarRainColor;
                     break;
                 default: // THUNDER
                     isStorm = true;
                     isThunder = true;
                     chatMsg = chatThunderText;
                     bossbarText = bossbarThunderText;
-                    color = BarColor.PURPLE;
+                    color = bossbarThunderColor;
                     break;
             }
 
@@ -401,7 +418,6 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             world.setThundering(isThunder);
             world.setWeatherDuration(Integer.MAX_VALUE);
 
-            // Сообщение только игрокам этого мира, только если разрешено и текст не пустой
             if (showChatMessage && chatMsg != null && !chatMsg.isEmpty()) {
                 for (Player p : world.getPlayers()) {
                     p.sendMessage(chatMsg);
@@ -417,15 +433,15 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             switch (currentState) {
                 case SUN:
                     text = bossbarSunText;
-                    color = BarColor.YELLOW;
+                    color = bossbarSunColor;
                     break;
                 case RAIN:
                     text = bossbarRainText;
-                    color = BarColor.BLUE;
+                    color = bossbarRainColor;
                     break;
                 default:
                     text = bossbarThunderText;
-                    color = BarColor.PURPLE;
+                    color = bossbarThunderColor;
                     break;
             }
             updateBossbar(world, text, color);
@@ -450,23 +466,44 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                 return;
             }
 
+            boolean fixed = isFixedMode(currentState);
+
+            // В fixed-режиме бар может скрываться раньше конца погоды (display-seconds)
+            if (fixed) {
+                int disp = displaySecondsFor(currentState);
+                if (disp >= 0) {
+                    long stateStart = nextChangeAt - stateTotalMs;
+                    long elapsedMs = System.currentTimeMillis() - stateStart;
+                    if (elapsedMs >= disp * 1000L) {
+                        removeBossbar(world);
+                        return;
+                    }
+                }
+            }
+
+            BarStyle style = styleFor(currentState);
+
             BossBar bar = activeBossBars.get(world);
             if (bar == null) {
-                bar = Bukkit.createBossBar(text, color, BarStyle.SEGMENTED_10);
+                bar = Bukkit.createBossBar(text, color, style);
                 activeBossBars.put(world, bar);
             }
 
             bar.setTitle(text);
             bar.setColor(color);
+            bar.setStyle(style);
 
-            // Прогресс: доля оставшегося времени текущего состояния
-            long leftMs = Math.max(0L, nextChangeAt - System.currentTimeMillis());
-            float progress = stateTotalMs > 0L
-                    ? Math.max(0f, Math.min(1f, (float) leftMs / (float) stateTotalMs))
-                    : 1f;
+            float progress;
+            if (fixed) {
+                progress = (float) fixedProgressFor(currentState);
+            } else {
+                long leftMs = Math.max(0L, nextChangeAt - System.currentTimeMillis());
+                progress = stateTotalMs > 0L
+                        ? Math.max(0f, Math.min(1f, (float) leftMs / (float) stateTotalMs))
+                        : 1f;
+            }
             bar.setProgress(progress);
 
-            // Боссбар видят только игроки этого мира
             for (Player online : Bukkit.getOnlinePlayers()) {
                 if (online.getWorld().equals(world)) {
                     bar.addPlayer(online);
@@ -476,11 +513,101 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             }
         }
 
+        private BarStyle styleFor(WeatherState state) {
+            switch (state) {
+                case SUN:
+                    return bossbarSunStyle;
+                case RAIN:
+                    return bossbarRainStyle;
+                default:
+                    return bossbarThunderStyle;
+            }
+        }
+
+        private boolean isFixedMode(WeatherState state) {
+            String mode;
+            switch (state) {
+                case SUN:
+                    mode = bossbarSunMode;
+                    break;
+                case RAIN:
+                    mode = bossbarRainMode;
+                    break;
+                default:
+                    mode = bossbarThunderMode;
+                    break;
+            }
+            return "fixed".equals(mode);
+        }
+
+        private int displaySecondsFor(WeatherState state) {
+            switch (state) {
+                case SUN:
+                    return bossbarSunDisplaySeconds;
+                case RAIN:
+                    return bossbarRainDisplaySeconds;
+                default:
+                    return bossbarThunderDisplaySeconds;
+            }
+        }
+
+        private double fixedProgressFor(WeatherState state) {
+            switch (state) {
+                case SUN:
+                    return bossbarSunFixedProgress;
+                case RAIN:
+                    return bossbarRainFixedProgress;
+                default:
+                    return bossbarThunderFixedProgress;
+            }
+        }
+
         private void removeBossbar(World world) {
             BossBar old = activeBossBars.remove(world);
             if (old != null) {
                 old.removeAll();
             }
+        }
+    }
+
+    private static String normalizeMode(String raw) {
+        if (raw == null) {
+            return "countdown";
+        }
+        return "fixed".equalsIgnoreCase(raw.trim()) ? "fixed" : "countdown";
+    }
+
+    private static double clampProgress(double v) {
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
+    private static String defaultStyleFor(String mode) {
+        return "fixed".equals(mode) ? "SOLID" : "SEGMENTED_10";
+    }
+
+    /** Парсит имя стиля с fallback'ом на дефолт при опечатке. */
+    private static BarStyle parseStyle(String raw, BarStyle def) {
+        if (raw == null) {
+            return def;
+        }
+        String s = raw.trim().toUpperCase(Locale.ROOT);
+        try {
+            return BarStyle.valueOf(s);
+        } catch (IllegalArgumentException ex) {
+            return def;
+        }
+    }
+
+    /** Парсит имя цвета с fallback'ом на дефолт при опечатке. */
+    private static BarColor parseColor(String raw, BarColor def) {
+        if (raw == null) {
+            return def;
+        }
+        String s = raw.trim().toUpperCase(Locale.ROOT);
+        try {
+            return BarColor.valueOf(s);
+        } catch (IllegalArgumentException ex) {
+            return def;
         }
     }
 
