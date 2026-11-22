@@ -27,19 +27,29 @@ import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * WeatherAge — кастомная погода по мирам.
+ * WeatherAge — кастомная погода по мирам и группам миров.
  *
  * Логика режимов:
- *  - Мир в вайтлисте + есть секция custom-weather → кастомный цикл (солнце/дождь/гроза,
- *    боссбары, чат-оповещения).
- *  - Мир в вайтлисте + нет секции → обычная ванильная погода (плагин не вмешивается).
- *  - Мир не в вайтлисте → погода всегда солнечная (любая смена погоды отменяется).
+ *  - Мир в вайтлисте + есть его группа в custom-weather → кастомный цикл
+ *    (солнце/дождь/гроза, боссбары, чат-оповещения). Все миры группы
+ *    подчиняются ОДНОМУ циклу: одна погода, один таймер, один боссбар.
+ *  - Мир в вайтлисте + нет секции → обычная ванильная погода.
+ *  - Мир не в вайтлисте → погода всегда солнечная (любая смена отменяется).
+ *
+ * Группа миров задаётся ключом секции с именами через запятую:
+ *   "World,World1":
+ *     ...
+ * Один мир может входить только в одну группу; дубликаты отсекаются
+ * с сообщением в лог (первая группа в приоритете).
  */
 public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
-    private final Map<String, WorldConfig> worldConfigs = new HashMap<>();
+    private final List<WorldConfig> weatherGroups = new ArrayList<>();
+    /** Мир → группа, в которую он входит (после отсечения дублей). */
+    private final Map<String, WorldConfig> worldToConfig = new HashMap<>();
     private final Set<String> whitelist = new HashSet<>();
-    private final Map<World, BossBar> activeBossBars = new HashMap<>();
+    /** Боссбар на группу миров (ключ — идентификатор группы из конфига). */
+    private final Map<String, BossBar> activeBossBars = new HashMap<>();
     private final List<BukkitRunnable> cycleTasks = new ArrayList<>();
 
     /** Миры, где разрешена одна принудительная смена погоды (для миров вне вайтлиста). */
@@ -72,7 +82,8 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
         startCustomWeatherCycles();
 
-        getLogger().info("WeatherAge включен. Миров в вайтлисте: " + whitelist.size());
+        getLogger().info("WeatherAge включен. Миров в вайтлисте: " + whitelist.size()
+                + ", групп кастомной погоды: " + weatherGroups.size());
     }
 
     @Override
@@ -118,7 +129,8 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
 
     private void loadConfig() {
         whitelist.clear();
-        worldConfigs.clear();
+        weatherGroups.clear();
+        worldToConfig.clear();
 
         List<String> wl = getConfig().getStringList("whitelist");
         if (wl != null) {
@@ -130,44 +142,92 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         }
 
         ConfigurationSection custom = getConfig().getConfigurationSection("custom-weather");
-        if (custom != null) {
-            for (String worldName : custom.getKeys(false)) {
-                ConfigurationSection sec = custom.getConfigurationSection(worldName);
-                if (sec != null) {
-                    worldConfigs.put(worldName, new WorldConfig(worldName, sec));
+        if (custom == null) {
+            return;
+        }
+
+        for (String groupKey : custom.getKeys(false)) {
+            ConfigurationSection sec = custom.getConfigurationSection(groupKey);
+            if (sec == null) {
+                continue;
+            }
+
+            // Разбираем имена миров из ключа: "World,World1" → [World, World1]
+            List<String> names = new ArrayList<>();
+            for (String raw : groupKey.split(",")) {
+                if (raw != null && !raw.trim().isEmpty()) {
+                    names.add(raw.trim());
                 }
+            }
+            if (names.isEmpty()) {
+                getLogger().warning("Секция custom-weather '" + groupKey
+                        + "' не содержит имён миров — пропущена.");
+                continue;
+            }
+
+            // Проверка на дубли: один мир — только в одной группе.
+            // Первая встретившаяся группа в приоритете.
+            List<String> accepted = new ArrayList<>();
+            for (String name : names) {
+                WorldConfig existing = worldToConfig.get(name);
+                if (existing != null) {
+                    getLogger().warning("КОНФЛИКТ ГРУПП: мир '" + name + "' указан в двух группах "
+                            + "custom-weather: '" + existing.getGroupId() + "' и '" + groupKey + "'. "
+                            + "В группе '" + groupKey + "' этот мир проигнорирован — "
+                            + "он подчиняется циклу группы '" + existing.getGroupId() + "'. "
+                            + "Уберите его из одной из групп.");
+                    continue;
+                }
+                accepted.add(name);
+            }
+            if (accepted.isEmpty()) {
+                getLogger().warning("Группа '" + groupKey + "': все её миры уже заняты "
+                        + "другими группами — секция пропущена.");
+                continue;
+            }
+
+            WorldConfig wc = new WorldConfig(groupKey, accepted, sec);
+            weatherGroups.add(wc);
+            for (String name : accepted) {
+                worldToConfig.put(name, wc);
             }
         }
     }
 
     private void startCustomWeatherCycles() {
-        for (String name : whitelist) {
-            World world = Bukkit.getWorld(name);
-            if (world == null) {
-                getLogger().warning("Мир '" + name + "' из вайтлиста не найден (возможно, ещё не загружен).");
+        for (WorldConfig wc : weatherGroups) {
+            List<World> worlds = new ArrayList<>();
+            for (String name : wc.getWorldNames()) {
+                if (!whitelist.contains(name)) {
+                    getLogger().warning("Мир '" + name + "' (группа '" + wc.getGroupId()
+                            + "') не в вайтлисте — исключён из цикла, погода в нём всегда солнечная. "
+                            + "Добавьте его в whitelist или уберите из группы.");
+                    continue;
+                }
+                World world = Bukkit.getWorld(name);
+                if (world == null) {
+                    getLogger().warning("Мир '" + name + "' (группа '" + wc.getGroupId()
+                            + "') не найден (возможно, ещё не загружен) — исключён из цикла.");
+                    continue;
+                }
+                worlds.add(world);
+            }
+
+            if (worlds.isEmpty()) {
+                getLogger().warning("Группа '" + wc.getGroupId()
+                        + "': не осталось ни одного рабочего мира — цикл не запущен.");
                 continue;
             }
 
-            WorldConfig wc = worldConfigs.get(name);
-            if (wc == null) {
-                getLogger().info("Мир '" + name + "': в вайтлисте без секции custom-weather — обычная ванильная погода.");
-                continue;
-            }
+            wc.setWorlds(worlds);
+            wc.init(); // первичная установка погоды и боссбара (без чата)
 
-            // Первичная установка погоды и боссбара — чтобы всё сходило с первой секунды.
-            wc.init(world);
-
-            WeatherCycleTask task = new WeatherCycleTask(world, wc);
+            WeatherCycleTask task = new WeatherCycleTask(wc);
             cycleTasks.add(task);
             task.runTaskTimer(this, 0L, 20L);
-        }
 
-        for (String cfgWorld : worldConfigs.keySet()) {
-            if (!whitelist.contains(cfgWorld)) {
-                getLogger().warning("Для мира '" + cfgWorld + "' есть секция custom-weather, "
-                        + "но мир не в вайтлисте — настройки игнорируются, погода в мире всегда солнечная. "
-                        + "Добавьте мир в whitelist или удалите секцию.");
-            }
+            getLogger().info("Группа '" + wc.getGroupId() + "' запущена ("
+                    + wc.getWorldNames().toString() + ").");
         }
     }
 
@@ -191,7 +251,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         allowNextWeatherChange.clear();
 
         reloadConfig();
-        loadConfig();
+        loadConfig(); // здесь же сработает проверка на дубли групп
 
         for (World world : Bukkit.getWorlds()) {
             if (whitelist.contains(world.getName())) {
@@ -205,8 +265,16 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         startCustomWeatherCycles();
     }
 
+    /**
+     * Принудительно ставит погоду в мире.
+     * type: "sun", "rain" или "storm".
+     * Для миров с кастомным конфигом сбрасывает счётчик группы: новый отсчёт
+     * начинается для ВСЕХ миров группы (цикл у группы один).
+     * Для миров вне конфига погода ставится напрямую: одна смена разрешается
+     * через allowNextWeatherChange, дальше мир живёт по своим правилам.
+     */
     public void forceWeather(World world, String type) {
-        WorldConfig wc = worldConfigs.get(world.getName());
+        WorldConfig wc = worldToConfig.get(world.getName());
         if (wc != null && whitelist.contains(world.getName())) {
             WeatherState state;
             if ("sun".equalsIgnoreCase(type)) {
@@ -216,7 +284,7 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             } else {
                 state = WeatherState.THUNDER;
             }
-            wc.forceWeather(world, state);
+            wc.forceWeather(state);
         } else {
             allowNextWeatherChange.add(world.getName());
             boolean storm = !"sun".equalsIgnoreCase(type);
@@ -228,11 +296,13 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
     }
 
     // ------------------------------------------------------------------
-    // Конфигурация одного мира
+    // Конфигурация одной группы миров
     // ------------------------------------------------------------------
 
     private class WorldConfig {
-        final String worldName;
+        private final String groupId;       // ключ секции из конфига, напр. "World,World1"
+        private final List<String> worldNames;
+        private List<World> worlds = new ArrayList<>();
 
         final boolean enableBossbarSun;
         final String bossbarSunMode;          // "countdown" | "fixed"
@@ -274,8 +344,9 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         private long nextChangeAt = 0L;
         private long stateTotalMs = 0L;
 
-        WorldConfig(String worldName, ConfigurationSection sec) {
-            this.worldName = worldName;
+        WorldConfig(String groupId, List<String> worldNames, ConfigurationSection sec) {
+            this.groupId = groupId;
+            this.worldNames = new ArrayList<>(worldNames);
 
             // ---------- Солнце ----------
             enableBossbarSun = sec.getBoolean("enable-bossbar-sun", true);
@@ -329,15 +400,30 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             currentState = pickNextState();
         }
 
+        String getGroupId() {
+            return groupId;
+        }
+
+        List<String> getWorldNames() {
+            return worldNames;
+        }
+
+        void setWorlds(List<World> worlds) {
+            this.worlds = worlds;
+        }
+
         /**
-         * Первичная установка погоды и боссбара при запуске цикла.
-         * Чат не трогаем: погода не «сменялась», она просто установилась.
+         * Первичная установка погоды и боссбара при запуске цикла для всех
+         * миров группы. Чат не трогаем: погода не «сменялась», она установилась.
          */
-        void init(World world) {
+        void init() {
             long duration = durationFor(currentState);
             stateTotalMs = duration * 1000L;
             nextChangeAt = System.currentTimeMillis() + stateTotalMs;
-            applyState(world, currentState, false);
+            for (World world : worlds) {
+                applyState(world, currentState, false);
+            }
+            updateBossbar();
         }
 
         private WeatherState pickNextState() {
@@ -373,67 +459,65 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             return ThreadLocalRandom.current().nextLong(min, max + 1);
         }
 
-        void update(World world) {
+        /** Тик цикла группы: одна смена состояния на все миры группы. */
+        void update() {
             long now = System.currentTimeMillis();
             if (now >= nextChangeAt) {
-                // Сначала обновляем счётчики нового состояния, потом применяем погоду —
-                // расчёт elapsed внутри updateBossbar идёт по актуальному состоянию.
+                // Сначала обновляем счётчики нового состояния, потом применяем погоду.
                 WeatherState next = pickNextState();
                 boolean changed = (next != currentState);
                 currentState = next;
                 stateTotalMs = durationFor(next) * 1000L;
                 nextChangeAt = now + stateTotalMs;
-                applyState(world, next, changed);
+                for (World world : worlds) {
+                    applyState(world, next, changed);
+                }
+                updateBossbar();
             } else {
-                updateBossbar(world);
+                updateBossbar();
             }
         }
 
         /**
-         * Принудительная установка погоды: сбрасывает счётчик, отсчёт начинается заново.
-         * Если поставили тот же тип погоды — только сброс таймера, без чата.
+         * Принудительная установка погоды для всей группы: сброс счётчика,
+         * отсчёт заново. Тот же тип → только сброс таймера, без чата.
          */
-        void forceWeather(World world, WeatherState state) {
+        void forceWeather(WeatherState state) {
             boolean changed = (state != currentState);
             currentState = state;
             stateTotalMs = durationFor(state) * 1000L;
             nextChangeAt = System.currentTimeMillis() + stateTotalMs;
-            applyState(world, state, changed);
+            for (World world : worlds) {
+                applyState(world, state, changed);
+            }
+            updateBossbar();
         }
 
         /**
-         * Применяет состояние к миру. Сообщение в чат — только если погода
-         * реально сменилась (announce = true) и текст непустой.
+         * Применяет состояние к одному миру группы. Сообщение в чат — только
+         * если погода реально сменилась (announce = true) и текст непустой.
          */
         private void applyState(World world, WeatherState state, boolean announce) {
             boolean isStorm;
             boolean isThunder;
 
             String chatMsg;
-            String bossbarText;
-            BarColor color;
 
             switch (state) {
                 case SUN:
                     isStorm = false;
                     isThunder = false;
                     chatMsg = chatSunText;
-                    bossbarText = bossbarSunText;
-                    color = bossbarSunColor;
                     break;
                 case RAIN:
                     isStorm = true;
                     isThunder = false;
                     chatMsg = chatRainText;
-                    bossbarText = bossbarRainText;
-                    color = bossbarRainColor;
                     break;
                 default: // THUNDER
                     isStorm = true;
                     isThunder = true;
                     chatMsg = chatThunderText;
-                    bossbarText = bossbarThunderText;
-                    color = bossbarThunderColor;
                     break;
             }
 
@@ -447,46 +531,29 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                     p.sendMessage(coloredMsg);
                 }
             }
-
-            updateBossbar(world, bossbarText, color);
         }
 
-        private void updateBossbar(World world) {
-            String text;
-            BarColor color;
-            switch (currentState) {
-                case SUN:
-                    text = bossbarSunText;
-                    color = bossbarSunColor;
-                    break;
-                case RAIN:
-                    text = bossbarRainText;
-                    color = bossbarRainColor;
-                    break;
-                default:
-                    text = bossbarThunderText;
-                    color = bossbarThunderColor;
-                    break;
-            }
-            updateBossbar(world, text, color);
-        }
-
-        private void updateBossbar(World world, String text, BarColor color) {
+        /** Обновляет боссбар группы (один на все миры группы). */
+        private void updateBossbar() {
             boolean showBar;
+            String text;
             switch (currentState) {
                 case SUN:
                     showBar = enableBossbarSun;
+                    text = bossbarSunText;
                     break;
                 case RAIN:
                     showBar = enableBossbarRain;
+                    text = bossbarRainText;
                     break;
                 default:
                     showBar = enableBossbarThunder;
+                    text = bossbarThunderText;
                     break;
             }
 
             if (!showBar) {
-                removeBossbar(world);
+                removeBossbar();
                 return;
             }
 
@@ -499,18 +566,19 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
                     long stateStart = nextChangeAt - stateTotalMs;
                     long elapsedMs = System.currentTimeMillis() - stateStart;
                     if (elapsedMs >= disp * 1000L) {
-                        removeBossbar(world);
+                        removeBossbar();
                         return;
                     }
                 }
             }
 
+            BarColor color = colorFor(currentState);
             BarStyle style = styleFor(currentState);
 
-            BossBar bar = activeBossBars.get(world);
+            BossBar bar = activeBossBars.get(groupId);
             if (bar == null) {
                 bar = Bukkit.createBossBar(cc(text), color, style);
-                activeBossBars.put(world, bar);
+                activeBossBars.put(groupId, bar);
             }
 
             bar.setTitle(cc(text));
@@ -528,12 +596,24 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             }
             bar.setProgress(progress);
 
+            // Бар видят игроки всех миров группы
             for (Player online : Bukkit.getOnlinePlayers()) {
-                if (online.getWorld().equals(world)) {
+                if (worlds.contains(online.getWorld())) {
                     bar.addPlayer(online);
                 } else {
                     bar.removePlayer(online);
                 }
+            }
+        }
+
+        private BarColor colorFor(WeatherState state) {
+            switch (state) {
+                case SUN:
+                    return bossbarSunColor;
+                case RAIN:
+                    return bossbarRainColor;
+                default:
+                    return bossbarThunderColor;
             }
         }
 
@@ -549,19 +629,14 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
         }
 
         private boolean isFixedMode(WeatherState state) {
-            String mode;
             switch (state) {
                 case SUN:
-                    mode = bossbarSunMode;
-                    break;
+                    return "fixed".equals(bossbarSunMode);
                 case RAIN:
-                    mode = bossbarRainMode;
-                    break;
+                    return "fixed".equals(bossbarRainMode);
                 default:
-                    mode = bossbarThunderMode;
-                    break;
+                    return "fixed".equals(bossbarThunderMode);
             }
-            return "fixed".equals(mode);
         }
 
         private int displaySecondsFor(WeatherState state) {
@@ -586,8 +661,8 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
             }
         }
 
-        private void removeBossbar(World world) {
-            BossBar old = activeBossBars.remove(world);
+        private void removeBossbar() {
+            BossBar old = activeBossBars.remove(groupId);
             if (old != null) {
                 old.removeAll();
             }
@@ -646,21 +721,19 @@ public final class WeatherAgePlugin extends JavaPlugin implements Listener {
     private enum WeatherState { SUN, RAIN, THUNDER }
 
     // ------------------------------------------------------------------
-    // Задача-цикл
+    // Задача-цикл (одна на группу миров)
     // ------------------------------------------------------------------
 
     private class WeatherCycleTask extends BukkitRunnable {
-        private final World world;
         private final WorldConfig config;
 
-        WeatherCycleTask(World world, WorldConfig config) {
-            this.world = world;
+        WeatherCycleTask(WorldConfig config) {
             this.config = config;
         }
 
         @Override
         public void run() {
-            config.update(world);
+            config.update();
         }
     }
 }
