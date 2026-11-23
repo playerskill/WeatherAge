@@ -19,10 +19,10 @@ import java.util.List;
  * Обработчик команды /weatherage.
  *
  * Подкоманды:
- *   /weatherage               — инфо о плагине и авторе (зашито в коде).
- *   /weatherage reload        — перезагрузка конфига (право weatherage.admin).
+ *   /weatherage               — информация о плагине и авторе.
+ *   /weatherage reload        — перезагрузка конфига (требуется weatherage.admin).
  *   /weatherage sun|rain|storm [мир] — принудительная смена погоды
- *                               (право weatherage.force). Без аргумента мир
+ *                               (требуется weatherage.admin). Без аргумента мир
  *                               берётся тот, где стоит игрок; для консоли —
  *                               первый мир сервера.
  */
@@ -43,9 +43,11 @@ public final class WeatherAgeCommand implements CommandExecutor, TabCompleter {
             return false;
         }
 
-        // /weatherage — зашитая в коде строка о функциях и авторе
+        // /weatherage — приветственное сообщение с информацией об авторе
         if (args.length == 0) {
-            sender.sendMessage(color("&bWeather&3Age &7- &fплагин для управления погодой от &6PlayeR_SkiLL&f."));
+            sender.sendMessage(color(
+                "&bWeather&3Age &7- &fплагин для управления погодой от &6PlayeR_SkiLL&f."
+            ));
             return true;
         }
 
@@ -59,16 +61,16 @@ public final class WeatherAgeCommand implements CommandExecutor, TabCompleter {
                 return true;
             }
 
-            plugin.reloadAll();
+            plugin.reloadWeatherAge();
             sendFromConfig(sender, "messages.reload-success",
-                    "&aКонфиг WeatherAge перезагружен.");
+                    "&aКонфигурация WeatherAge успешно перезагружена.");
             plugin.getLogger().info(sender.getName() + " перезагрузил конфиг WeatherAge.");
             return true;
         }
 
         // ---------- /weatherage sun|rain|storm [world] ----------
         if ("sun".equals(sub) || "rain".equals(sub) || "storm".equals(sub)) {
-            if (!sender.hasPermission("weatherage.force")) {
+            if (!sender.hasPermission("weatherage.admin")) {
                 sendFromConfig(sender, "messages.no-permission",
                         "&cУ вас нет прав на принудительную смену погоды.");
                 return true;
@@ -76,21 +78,28 @@ public final class WeatherAgeCommand implements CommandExecutor, TabCompleter {
 
             World target = resolveWorld(sender, args);
             if (target == null) {
-                sender.sendMessage(color("&cНе удалось определить мир. Укажите его: /weatherage "
-                        + sub + " <мир>"));
+                sender.sendMessage(color("&cНе удалось определить мир. Укажите его явно: /weatherage "
+                        + sub + " <имя_мира>"));
                 return true;
             }
 
-            plugin.forceWeather(target, sub);
+            // Проверка whitelist: миры вне списка всегда солнечные, принудительно менять нельзя
+            if (!plugin.isWhitelisted(target)) {
+                sendFromConfig(sender, "messages.not-whitelisted",
+                        "&cВ этом мире погода всегда ясная и не может быть изменена.");
+                return true;
+            }
+
+            plugin.getCustomManager().forceWeather(target, sub);
 
             String msgKey = "messages.forced-" + sub;
             String defMsg;
             if ("sun".equals(sub)) {
-                defMsg = "&aПогода в мире '%world%' установлена: Солнце.";
+                defMsg = "&aПогода в мире &7%world% &aустановлена на &eСолнце&a.";
             } else if ("rain".equals(sub)) {
-                defMsg = "&aПогода в мире '%world%' установлена: Дождь.";
+                defMsg = "&aПогода в мире &7%world% &aустановлена на &bДождь&a.";
             } else {
-                defMsg = "&aПогода в мире '%world%' установлена: Гроза.";
+                defMsg = "&aПогода в мире &7%world% &aустановлена на &9Гроза&a.";
             }
             sendFromConfig(sender, msgKey, defMsg, "%world%", target.getName());
 
@@ -100,8 +109,7 @@ public final class WeatherAgeCommand implements CommandExecutor, TabCompleter {
         }
 
         // ---------- неизвестная подкоманда ----------
-        sender.sendMessage(color("&cНеизвестная подкоманда. Используйте: /weatherage "
-                + "[reload|sun|rain|storm] [мир]"));
+        sender.sendMessage(color("&cНеизвестная подкоманда. Доступные варианты: /weatherage [reload|sun|rain|storm] [мир]"));
         return true;
     }
 
