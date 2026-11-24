@@ -15,6 +15,7 @@ import java.util.Map;
 public class VanillaWeatherListener implements Listener {
 
     private final WeatherAgePlugin plugin;
+    
     // Храним состояние: был ли дождь/гроза в мире ДО этого события
     private final Map<String, Boolean> wasRaining = new HashMap<>();
     private final Map<String, Boolean> wasThundering = new HashMap<>();
@@ -34,8 +35,15 @@ public class VanillaWeatherListener implements Listener {
         // Если это не мир с vanilla-weather — не делаем ничего
         if (cfg == null) return;
 
-        boolean nowRaining = event.isRain();
-        boolean nowThundering = event.isThundering();
+        // ВАЖНО: В Bukkit нет event.isRain(). 
+        // Мы определяем изменение погоды, сравнивая текущее состояние с сохранённым ранее.
+        // Но так как событие приходит только при ИЗМЕНЕНИИ, мы можем считать, что погода сменилась.
+        // Однако нам нужно знать, НА ЧТО она сменилась. 
+        // В стандартном Bukkit API нет прямого способа узнать тип погоды из события.
+        // Поэтому мы используем хитрость: смотрим на мир и проверяем его погоду напрямую.
+        
+        boolean nowRaining = event.getWorld().hasStorm();
+        boolean nowThundering = event.getWorld().isThundering();
 
         Boolean prevRaining = wasRaining.getOrDefault(worldName, false);
         Boolean prevThundering = wasThundering.getOrDefault(worldName, false);
@@ -43,6 +51,7 @@ public class VanillaWeatherListener implements Listener {
         int cooldownTicks = cfg.stormWaitingTicks;
 
         // Логика: дождь начался (был не дождь, стал дождь)
+        // Примечание: hasStorm() возвращает true, если идет дождь или гроза.
         if (nowRaining && !prevRaining) {
             // Сбрасываем кулдаун грозы и запускаем сообщения/команды для дождя
             stormCooldown.put(worldName, 0);
@@ -55,6 +64,7 @@ public class VanillaWeatherListener implements Listener {
             Integer remaining = stormCooldown.getOrDefault(worldName, 0);
             if (remaining > 0) {
                 // Гроза началась слишком рано после дождя — считаем это частью дождя, не дублируем сообщения
+                // Можно добавить лог для отладки: plugin.getLogger().info("Storm ignored due to cooldown in " + worldName);
             } else {
                 handleThunderStart(worldName, cfg);
                 // После обработки грозы ставим кулдаун, чтобы не было повторных срабатываний в короткий промежуток
@@ -83,8 +93,10 @@ public class VanillaWeatherListener implements Listener {
         CommandRunner.runCommands(cfg.thunderStartCommands, plugin);
     }
 
-    // Каждую тик уменьшаем кулдаун (чтобы он не висел вечно)
-    // Лучше всего запускать один общий BukkitRunnable в WeatherAgePlugin.onEnable
+    /**
+     * Каждую тик уменьшаем кулдаун.
+     * Этот метод нужно вызывать из BukkitRunnable в WeatherAgePlugin.onEnable()
+     */
     public void tick() {
         for (Map.Entry<String, Integer> e : stormCooldown.entrySet()) {
             int remaining = e.getValue() - 1;
