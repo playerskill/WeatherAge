@@ -4,6 +4,7 @@ import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 
 public class CustomWeatherConfig {
     public final boolean enableBossbarSun;
