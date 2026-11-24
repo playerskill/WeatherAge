@@ -5,11 +5,14 @@ import org.bukkit.ChatColor;
 import org.bukkit.World;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
+import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import ru.player_skill.weatherage.WeatherAgePlugin;
 import ru.player_skill.weatherage.config.CustomWeatherConfig;
 import ru.player_skill.weatherage.util.CommandRunner;
 
+import java.util.List;
 import java.util.Random;
 
 public class CustomWeatherManager {
@@ -59,11 +62,8 @@ public class CustomWeatherManager {
                 }
 
                 applyCustomWeather(world, nextWeather, durationSeconds, cfg);
-
-                // Планируем следующий цикл: после окончания текущей погоды
-                runTaskLater(this, durationSeconds * 20L);
             }
-        }.runTaskTimer(plugin, 0L, 20L * 60L); // проверка/запуск каждую минуту (можно уменьшить)
+        }.runTaskTimer(plugin, 0L, 20L * 60L); // проверка/запуск каждую минуту
     }
 
     /**
@@ -81,12 +81,12 @@ public class CustomWeatherManager {
                 sendChatMessage(world, cfg.chatSunText);
                 runCommands(cfg.sunStartCommands);
                 showBossBar(world,
-                    cfg.enableBossbarSun,
-                    cfg.bossbarSunStyle,
-                    cfg.bossbarSunColor,
-                    cfg.bossbarSunText,
-                    cfg.bossbarSunFixedProgress,
-                    cfg.bossbarSunDisplaySeconds
+                        cfg.enableBossbarSun,
+                        cfg.bossbarSunStyle,
+                        cfg.bossbarSunColor,
+                        cfg.bossbarSunText,
+                        cfg.bossbarSunFixedProgress,
+                        cfg.bossbarSunDisplaySeconds
                 );
                 break;
 
@@ -97,12 +97,12 @@ public class CustomWeatherManager {
                 sendChatMessage(world, cfg.chatRainText);
                 runCommands(cfg.rainStartCommands);
                 showBossBar(world,
-                    cfg.enableBossbarRain,
-                    cfg.bossbarRainStyle,
-                    cfg.bossbarRainColor,
-                    cfg.bossbarRainText,
-                    cfg.bossbarRainFixedProgress,
-                    cfg.bossbarRainDisplaySeconds
+                        cfg.enableBossbarRain,
+                        cfg.bossbarRainStyle,
+                        cfg.bossbarRainColor,
+                        cfg.bossbarRainText,
+                        cfg.bossbarRainFixedProgress,
+                        cfg.bossbarRainDisplaySeconds
                 );
                 break;
 
@@ -113,12 +113,12 @@ public class CustomWeatherManager {
                 sendChatMessage(world, cfg.chatThunderText);
                 runCommands(cfg.thunderStartCommands);
                 showBossBar(world,
-                    cfg.enableBossbarThunder,
-                    cfg.bossbarThunderStyle,
-                    cfg.bossbarThunderColor,
-                    cfg.bossbarThunderText,
-                    cfg.bossbarThunderFixedProgress,
-                    cfg.bossbarThunderDisplaySeconds
+                        cfg.enableBossbarThunder,
+                        cfg.bossbarThunderStyle,
+                        cfg.bossbarThunderColor,
+                        cfg.bossbarThunderText,
+                        cfg.bossbarThunderFixedProgress,
+                        cfg.bossbarThunderDisplaySeconds
                 );
                 break;
         }
@@ -128,7 +128,6 @@ public class CustomWeatherManager {
 
     /**
      * Принудительная смена погоды через команду /wage sun|rain|storm [world].
-     * Отменяет текущий цикл и ставит новую погоду на заданную длительность.
      */
     public void forceWeather(String worldName, String weatherType) {
         World world = Bukkit.getWorld(worldName);
@@ -168,20 +167,16 @@ public class CustomWeatherManager {
         CommandRunner.runCommands(commands, plugin);
     }
 
-    private void showBossBar(World world, boolean enabled, BarStyle style, BarColor color, String text, float fixedProgress, int seconds) {
+    private void showBossBar(World world, boolean enabled, BarStyle style, BarColor color,
+                             String text, float fixedProgress, long seconds) {
         if (!enabled || text == null || text.isEmpty()) return;
 
         String coloredText = ChatColor.translateAlternateColorCodes('&', text);
 
-        // Для 1.12.2 боссбар создаётся и показывается каждому игроку отдельно.
-        // Это упрощённая реализация: фиксированный прогресс и текст, без анимации.
         for (Player p : world.getPlayers()) {
-            org.bukkit.boss.BossBar bossBar = Bukkit.createBossBar(
-                coloredText,
-                style,
-                color,
-                fixedProgress
-            );
+            // Порядок аргументов: (текст, ЦВЕТ, СТИЛЬ) — цвет идёт первым!
+            BossBar bossBar = Bukkit.createBossBar(coloredText, color, style);
+            bossBar.setProgress(fixedProgress);
             bossBar.addPlayer(p);
 
             // Удаляем боссбар через указанное время
