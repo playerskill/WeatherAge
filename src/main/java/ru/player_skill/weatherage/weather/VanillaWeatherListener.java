@@ -1,12 +1,10 @@
 package ru.player_skill.weatherage.weather;
 
-import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.weather.WeatherChangeEvent;
-import org.bukkit.scheduler.BukkitRunnable;
 import ru.player_skill.weatherage.WeatherAgePlugin;
 import ru.player_skill.weatherage.config.VanillaWeatherConfig;
 import ru.player_skill.weatherage.util.CommandRunner;
@@ -17,6 +15,10 @@ import java.util.Map;
 public class VanillaWeatherListener implements Listener {
 
     private final WeatherAgePlugin plugin;
+    // Храним состояние: был ли дождь/гроза в мире ДО этого события
+    private final Map<String, Boolean> wasRaining = new HashMap<>();
+    private final Map<String, Boolean> wasThundering = new HashMap<>();
+
     // Для каждого мира храним, сколько тиков осталось ждать после начала дождя, чтобы не дублировать грозу
     private final Map<String, Integer> stormCooldown = new HashMap<>();
 
@@ -32,36 +34,37 @@ public class VanillaWeatherListener implements Listener {
         // Если это не мир с vanilla-weather — не делаем ничего
         if (cfg == null) return;
 
-        boolean toRain = event.toRain();
-        boolean fromRain = event.fromRain();
-        boolean toThunder = event.toThundering();
-        boolean fromThunder = event.fromThundering();
+        boolean nowRaining = event.isRain();
+        boolean nowThundering = event.isThundering();
+
+        Boolean prevRaining = wasRaining.getOrDefault(worldName, false);
+        Boolean prevThundering = wasThundering.getOrDefault(worldName, false);
 
         int cooldownTicks = cfg.stormWaitingTicks;
 
-        // Логика: дождь начался
-        if (toRain && !fromRain) {
+        // Логика: дождь начался (был не дождь, стал дождь)
+        if (nowRaining && !prevRaining) {
             // Сбрасываем кулдаун грозы и запускаем сообщения/команды для дождя
             stormCooldown.put(worldName, 0);
             handleRainStart(worldName, cfg);
-            return;
         }
 
-        // Логика: гроза началась
-        if (toThunder && !fromThunder) {
+        // Логика: гроза началась (была не гроза, стала гроза)
+        if (nowThundering && !prevThundering) {
             // Проверяем кулдаун: если после начала дождя прошло меньше cooldownTicks — игнорируем
             Integer remaining = stormCooldown.getOrDefault(worldName, 0);
             if (remaining > 0) {
                 // Гроза началась слишком рано после дождя — считаем это частью дождя, не дублируем сообщения
-                return;
+            } else {
+                handleThunderStart(worldName, cfg);
+                // После обработки грозы ставим кулдаун, чтобы не было повторных срабатываний в короткий промежуток
+                stormCooldown.put(worldName, cooldownTicks);
             }
-            handleThunderStart(worldName, cfg);
-            // После обработки грозы ставим кулдаун, чтобы не было повторных срабатываний в короткий промежуток
-            stormCooldown.put(worldName, cooldownTicks);
-            return;
         }
 
-        // Опционально: можно обрабатывать конец дождя/грозы, если нужны сообщения «дождь закончился»
+        // Обновляем состояние для следующего события
+        wasRaining.put(worldName, nowRaining);
+        wasThundering.put(worldName, nowThundering);
     }
 
     private void handleRainStart(String worldName, VanillaWeatherConfig cfg) {
