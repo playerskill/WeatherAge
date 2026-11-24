@@ -7,23 +7,30 @@ import org.bukkit.event.Listener;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
+import ru.player_skill.weatherage.command.WeatherAgeCommand;
+import ru.player_skill.weatherage.config.CustomWeatherConfig;
+import ru.player_skill.weatherage.config.VanillaWeatherConfig;
+import ru.player_skill.weatherage.weather.CustomWeatherManager;
+import ru.player_skill.weatherage.weather.VanillaWeatherListener;
+import ru.player_skill.weatherage.weather.WeatherChangeEventGuard;
+
 import java.util.*;
 
 public class WeatherAgePlugin extends JavaPlugin {
 
     private FileConfiguration config;
     private final Set<String> whitelist = new HashSet<>();
-    
+
     // Карта режимов: мир -> режим (ALWAYS_SUN, VANILLA, и т.д.)
     private final Map<String, WorldMode> worldModeMap = new HashMap<>();
-    
+
     // Конфигурационные секции
     private final Map<String, CustomWeatherConfig> customWeatherConfig = new HashMap<>();
     private final Map<String, VanillaWeatherConfig> vanillaWeatherConfig = new HashMap<>();
 
     // Компоненты плагина (менеджеры и хелперы)
     private CustomWeatherManager customWeatherManager;
-    
+
     // Слушатели (нужны для регистрации и доступа к tick() у VanillaWeatherListener)
     private Listener weatherGuardListener;
     private VanillaWeatherListener vanillaListener;
@@ -39,7 +46,7 @@ public class WeatherAgePlugin extends JavaPlugin {
         validateWorlds();
 
         // --- Инициализация компонентов ---
-        
+
         // 1. Менеджер кастомной погоды
         customWeatherManager = new CustomWeatherManager(this);
 
@@ -74,9 +81,20 @@ public class WeatherAgePlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // При выключении плагина можно остановить активные циклы, если нужно.
-        // Сейчас BukkitRunnable сами умрут при выгрузке плагина.
         getLogger().info("WeatherAge disabled.");
+    }
+
+    // Публичный метод для команды: перезагрузка всех конфигов
+    public void reloadConfigs() {
+        whitelist.clear();
+        customWeatherConfig.clear();
+        vanillaWeatherConfig.clear();
+        worldModeMap.clear();
+
+        loadWhitelist();
+        loadCustomWeather();
+        loadVanillaWeather();
+        validateWorlds();
     }
 
     private void loadWhitelist() {
@@ -100,7 +118,9 @@ public class WeatherAgePlugin extends JavaPlugin {
                 getLogger().warning("Invalid config for world '" + worldName + "' in custom-weather.");
                 continue;
             }
-            CustomWeatherConfig cfg = new CustomWeatherConfig((Map<String, Object>) value);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> worldData = (Map<String, Object>) value;
+            CustomWeatherConfig cfg = new CustomWeatherConfig(worldData);
             customWeatherConfig.put(worldName, cfg);
         }
     }
@@ -117,7 +137,9 @@ public class WeatherAgePlugin extends JavaPlugin {
                 getLogger().warning("Invalid config for world '" + worldName + "' in vanilla-weather.");
                 continue;
             }
-            VanillaWeatherConfig cfg = new VanillaWeatherConfig((Map<String, Object>) value);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> worldData = (Map<String, Object>) value;
+            VanillaWeatherConfig cfg = new VanillaWeatherConfig(worldData);
             vanillaWeatherConfig.put(worldName, cfg);
         }
     }
@@ -156,7 +178,6 @@ public class WeatherAgePlugin extends JavaPlugin {
     public boolean isWorldAllowedForCommand(String worldName) {
         WorldMode mode = worldModeMap.get(worldName);
         if (mode == null) return false;
-        // Команды /weatherage sun/rain/storm разрешены только для CUSTOM и VANILLA_WITH_MESSAGES
         return mode == WorldMode.CUSTOM || mode == WorldMode.VANILLA_WITH_MESSAGES;
     }
 
@@ -186,11 +207,11 @@ public class WeatherAgePlugin extends JavaPlugin {
         return map;
     }
 
-    // Перечисление режимов мира (оставляем внутри класса для удобства, но лучше вынести в отдельный файл)
+    // Перечисление режимов мира (единственный экземпляр — другие дубликаты удалить!)
     public enum WorldMode {
-        ALWAYS_SUN,           // не в whitelist
-        VANILLA,              // в whitelist, без настроек
-        VANILLA_WITH_MESSAGES,// vanilla-weather
-        CUSTOM                // custom-weather
+        ALWAYS_SUN,            // не в whitelist
+        VANILLA,               // в whitelist, без настроек
+        VANILLA_WITH_MESSAGES, // vanilla-weather
+        CUSTOM                 // custom-weather
     }
 }
