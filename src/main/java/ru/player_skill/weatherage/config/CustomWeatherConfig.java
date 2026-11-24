@@ -1,4 +1,4 @@
-package ru.player_skill.weatherage;
+package ru.player_skill.weatherage.config;
 
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
