@@ -9,12 +9,14 @@ import org.bukkit.World;
 import org.bukkit.Bukkit;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 public class WeatherAgeCommand implements CommandExecutor {
 
     private final WeatherAgePlugin plugin;
+
     // Приветственное сообщение, которое показываем даже без прав
     private static final String INTRO_MESSAGE = ChatColor.translateAlternateColorCodes('&',
         "&bWeather&3Age &7- &fплагин для управления погодой от &6PlayeR_SkiLL&f."
@@ -56,22 +58,34 @@ public class WeatherAgeCommand implements CommandExecutor {
     private void handleReload(CommandSender sender) {
         if (!sender.hasPermission("weatherage.admin") && !(sender instanceof Player)) {
             // Консоль может релоадить всегда, игроки — только по пермишену
-            sender.sendMessage(plugin.getMessages().get("no-permission"));
+            String noPermMsg = plugin.getMessages().get("no-permission");
+            if (noPermMsg != null) {
+                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', noPermMsg));
+            } else {
+                sender.sendMessage("&cУ вас нет прав на эту команду.");
+            }
             return;
         }
 
-        plugin.reloadConfig();
-        plugin.loadWhitelist();
-        plugin.loadCustomWeather();
-        plugin.loadVanillaWeather();
-        plugin.validateWorlds();
+        // ВАЖНО: этот метод нужно добавить в WeatherAgePlugin.java как public
+        plugin.reloadConfigs();
 
-        sender.sendMessage(plugin.getMessages().get("reload-success"));
+        String successMsg = plugin.getMessages().get("reload-success");
+        if (successMsg != null) {
+            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', successMsg));
+        } else {
+            sender.sendMessage("&aКонфиги перезагружены.");
+        }
     }
 
     private void handleForceWeather(CommandSender sender, String weatherType, String[] args) {
         if (!sender.hasPermission("weatherage.force")) {
-            sender.sendMessage(plugin.getMessages().get("no-permission"));
+            String noPermMsg = plugin.getMessages().get("no-permission");
+            if (noPermMsg != null) {
+                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', noPermMsg));
+            } else {
+                sender.sendMessage("&cУ вас нет прав на принудительную смену погоды.");
+            }
             return;
         }
 
@@ -95,7 +109,13 @@ public class WeatherAgeCommand implements CommandExecutor {
 
         // Проверка: разрешены ли команды для этого мира
         if (!plugin.isWorldAllowedForCommand(worldName)) {
-            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВ этом мире принудительная смена погоды запрещена (мир не в whitelist или всегда солнечный)."));
+            String blockMsg = plugin.getMessages().get("command-blocked");
+            if (blockMsg != null) {
+                blockMsg = blockMsg.replace("%world%", worldName);
+                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', blockMsg));
+            } else {
+                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', "&cВ этом мире принудительная смена погоды запрещена (мир не в whitelist или всегда солнечный)."));
+            }
             return;
         }
 
@@ -103,8 +123,6 @@ public class WeatherAgeCommand implements CommandExecutor {
         boolean isRain = "rain".equals(weatherType);
         boolean isStorm = "storm".equals(weatherType);
 
-        // Здесь можно позже добавить реальную логику установки погоды.
-        // Сейчас просто возвращаем сообщения из конфига.
         if ("sun".equals(weatherType)) {
             msgKey = "forced-sun";
             targetWorld.setWeatherDuration(0); // отменяем дождь/грозу
@@ -129,7 +147,7 @@ public class WeatherAgeCommand implements CommandExecutor {
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         if (args.length == 1) {
-            return new ArrayList<>(List.of("reload", "sun", "rain", "storm"));
+            return new ArrayList<>(Arrays.asList("reload", "sun", "rain", "storm"));
         }
         if (args.length == 2) {
             List<String> worlds = new ArrayList<>();
