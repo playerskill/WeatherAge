@@ -1,4 +1,4 @@
-package ru.player_skill.weatherage;
+package ru.player_skill.weatherage.config;
 
 import java.util.List;
 import java.util.Map;
