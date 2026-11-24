@@ -2,18 +2,19 @@ name: WeatherAge
 version: 1.0.0
 main: ru.player_skill.weatherage.WeatherAgePlugin
 author: PlayeR_SkiLL, Alice AI
-description: A plugin for creating your own rules for changing the weather in the worlds. Made by Alice AI at the request of PlayeR_SkiLL.
+description: Плагин для гибкой настройки циклов погоды в разных мирах (включая кастомные циклы, боссбары и сообщения).
+api-version: 1.13  # это нормально для 1.12.2: поле не ломает работу, но помогает серверам понимать совместимость
 
 commands:
   weatherage:
     description: Управление погодой WeatherAge
-    usage: /weatherage [reload|sun|rain|storm] [world]
+    usage: /weatherage <reload|sun|rain|storm> [world]
     aliases:
       - wage
 
 permissions:
   weatherage.admin:
-    description: Перезагрузка конфига плагина
+    description: Доступ ко всем админ-командам плагина (включая reload)
     default: op
     children:
       weatherage.force: true
