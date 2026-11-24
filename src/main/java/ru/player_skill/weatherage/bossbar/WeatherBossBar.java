@@ -1,22 +1,47 @@
-package ru.player_skill.weatherage.util;
+package ru.player_skill.weatherage.bossbar;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.World;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
 import ru.player_skill.weatherage.WeatherAgePlugin;
 
-import java.util.List;
+public class WeatherBossBar {
 
-public class CommandRunner {
-    public static void runCommands(List<String> commands, WeatherAgePlugin plugin) {
-        if (commands == null || commands.isEmpty()) return;
+    private final WeatherAgePlugin plugin;
 
-        for (String cmd : commands) {
-            if (cmd == null) continue;
-            String trimmed = cmd.trim();
-            if (trimmed.isEmpty() || trimmed.equalsIgnoreCase("none")) continue;
+    public WeatherBossBar(WeatherAgePlugin plugin) {
+        this.plugin = plugin;
+    }
 
-            // Выполняем от имени консоли, чтобы не зависеть от прав игроков
-            Bukkit.getServer().dispatchCommand(Bukkit.getConsoleSender(), trimmed);
+    /**
+     * Показывает боссбар всем игрокам в мире.
+     * @param world Мир
+     * @param enabled Включен ли боссбар
+     * @param style Стиль
+     * @param color Цвет
+     * @param text Текст (с цветовыми кодами)
+     * @param fixedProgress Фиксированный прогресс (0.0–1.0). Если 0.0 — можно сделать countdown.
+     * @param seconds Длительность показа
+     */
+    public void show(World world, boolean enabled, BarStyle style, BarColor color, String text, float fixedProgress, int seconds) {
+        if (!enabled || text == null || text.isEmpty()) return;
+        String coloredText = ChatColor.translateAlternateColorCodes('&', text);
+
+        for (Player p : world.getPlayers()) {
+            org.bukkit.boss.BossBar bossBar = Bukkit.createBossBar(coloredText, style, color, fixedProgress);
+            bossBar.addPlayer(p);
+
+            // Удаляем боссбар через указанное время
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    bossBar.removeAll();
+                }
+            }.runTaskLater(plugin, seconds * 20L); // ticks = seconds * 20
         }
     }
 }
